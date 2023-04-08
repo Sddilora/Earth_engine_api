@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>My Web Page</title>
+    <script src="https://apis.google.com/js/platform.js" async defer></script>
+    <meta name="google-signin-client_id" content="575272048965-bcvtr218dp26gnm4tpc1ssk9mh958nr6.apps.googleusercontent.com">
+  </head>
+  <body>
+    <div class="g-signin2" data-onsuccess="onSignIn"></div>
+
+    <script defer>
+      function onSignIn(googleUser) {
+        var profile = googleUser.getBasicProfile();
+        console.log("Name: " + profile.getName());
+        console.log("Email: " + profile.getEmail());
+      }
+
+      // Load the Google APIs client library
+      gapi.load('client:auth2', {
+        'cookie_policy': 'single_host_origin', // Set the cookie policy
+        'onload': function() {
+          // Initialize the Google APIs client library
+          gapi.client.init({
+            'clientId': '575272048965-bcvtr218dp26gnm4tpc1ssk9mh958nr6.apps.googleusercontent.com',
+            'scope': 'email'
+          });
+        }
+      });
+
+    </script>
+  </body>
+</html>

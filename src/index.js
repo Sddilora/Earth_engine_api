@@ -1,110 +1,48 @@
-var ee = require('@google/earthengine');
+const hexGrid = require('@turf/hex-grid').default;
+const express = require("express");
+const app = express();
+var ee = require("@google/earthengine");
 
-// Define study area
-var TIGER = ee.FeatureCollection('TIGER/2018/Counties');
-var region =  ee.Feature(TIGER
-.filter(ee.Filter.eq('STATEFP', '17'))
-.filter(ee.Filter.eq('NAME', 'Mclean')).first());
-var geometry = region.geometry();
-Map.centerObject(region);
-Map.addLayer(region, {'color':'blue'}, 'McLean County');
+app.use(express.json());
 
-//Import Landsat Imagery
-var landsat7 = ee.ImageCollection('LANDSAT/LE07/CO2/T1_L2');
-var landsat8 = ee.ImageCollection('LANDSAT/LE08/CO2/T1_L2');
+// Private key, in `.json` format, for an Earth Engine service account.
+const PRIVATE_KEY = require("./key.json");
+const PORT = process.env.PORT || 3000;
+const DEGREES_LATITUDE_TO_MILES = 69;
 
+app.get("/earthengine", (req, res) => {
+  // Enable CORS, allowing client in Cloud Storage to see response data.
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "GET");
 
-// Functions to rename Landsat 7 and 8 images.
-function renameL7(img){
-  return img.rename(['BLUE', 'GREEN', 'RED', 'NIR', 'SWIR1',
-  'SWIR2', 'TEMP1', 'ATMOS_OPACITY', 'QA_CLOUD', 'ATRAN', 
-  'CDIST', 'DRAD', 'EMIS', 'EMSD', 'QA', 'TRAD', 'URAD',
-  'QA_PIXEL', 'QA_RADSAT']);
-}
-function renameL8(img){
-  return img.rename(['AEROS', 'BLUE', 'GREEN', 'RED', 'NIR', 'SWIR1',
-  'SWIR2', 'TEMP1', 'QA_AEROSOL', 'ATRAN', 
-  'CDIST', 'DRAD', 'EMIS', 'EMSD', 'QA', 'TRAD', 'URAD',
-  'QA_PIXEL', 'QA_RADSAT']);
-}
+  // Get viewport bounds from client request.
+  const bounds = [
+    Number(req.query.minLng),
+    Number(req.query.minLat),
+    Number(req.query.maxLng),
+    Number(req.query.maxLat),
+  ];
+  // auth server-side api
+  ee.data.authenticateViaPrivateKey(PRIVATE_KEY, () => {
+    ee.initialize(null, null, () => {
 
-function addMask(img) {
- // Bit 0: Fill
- // Bit 1: Dilated Cloud
- // Bit 2: Cirrus
- // Bit 3: Cloud
- // Bit 4: Cloud Shadow
- // Bit 5: Snow
- // Bit 6: Clear
- // Bit 7: Water
- var clear = img.select('QA_PIXEL').bitwiseAnd(64).neq(0);
- clear = clear.updateMask(clear).rename(['pxqa_clear']);
-  
- var water = img.select('QA_PIXEL').bitwiseAnd(128).neq(0);
- water = water.updateMask(clear).rename(['pxqa_water']);
-   
- var cloud_shadow = img.select('QA_PIXEL').bitwiseAnd(16).neq(0);
- cloud_shadow = cloud_shadow.updateMask(clear).rename(['pxqa_cloudshadow']);
- 
- var snow = img.select('QA_PIXEL').bitwiseAnd(32).neq(0);
- snow = snow.updateMask(clear).rename(['pxqa_snow']);
- 
- var masks = ee.Image.cat([clear, water,
- cloud_shadow, snow]);
- 
- return img.addBands(masks);
-  
-}
+      // Load an image estimating number of persons per 30 arc-second grid cell.
+      const image = ee.Image('CIESIN/GPWv4/population-count/2015');
 
-function maskQAClear(img) {
-  return img.UpdateMask(img.select('pxqa_clear'));
-}
+      // Create a hexgrid covering the viewport, with TurfJS.
+      const cellDiameter =
+          200 * Math.abs(bounds[3] - bounds[1]) / DEGREES_LATITUDE_TO_MILES;
+      const gridGeoJson = hexGrid(bounds, cellDiameter, 'miles');
+      const gridFeatures = ee.FeatureCollection(gridGeoJson.features);
 
-// Green Chlorophyll Vegetation Index GCVI
-// Function to add GCVI as a band.
-function addVIs(img) {
-  var gcvi = img.expression('(nir / green) - 1', {
-    nir: img.select('NIR'),
-    green: img.select('GREEN')
-  }).select([0], ['GCVI']);
-  
-  return ee.Image.cat([img, gcvi]);
-}
+      // Compute sum of population values for each hex cell.
+      const reducedFeatures =
+          image.reduceRegions(gridFeatures, ee.call('Reducer.sum'));
+      reducedFeatures.evaluate((geojson) => res.send(geojson));
+    });
+  });
+});
 
-// Define study time period
-var start_date = '2020-01-01';
-var end_date = '2020-12-31';
-
-// Pull Landsat 7 and 8 imagery over the study area between
-// these dates
-var landsat7coll = landsat7.filterBounds(geometry)
-.filterDate(start_date, end_date).map(renameL7);
-
-var landsat8coll = landsat8.filterBounds(geometry)
-.filterDate(start_date, end_date).map(renameL8);
-
-// Merge Landsat 7 and 8 collections.
-var landsat = landsat7coll.merge(landsat8coll)
-.sort('system:time_start');
-
-// Mask out on-clear pixels, add VI, and time
-landsat = ladsat.map(addMask)
-.map(maskQAClear).map(addVIs);
-
-// Visualzie GCVI time series at one location.
-var point = ee.Geometry.Point([
-  -88.81417685576481, 40.579804398254005]);
-  
-// var landsatChart = ui.Chart.image.series(
-//   landsa.select('GCVI'), point)
-//   .setChartType('ScatterChart')
-//   .setOptions({
-//     title:'Landsat GCVI time series',
-//     lineWidth: 1,
-//     pointSize: 3,
-//   });
-//    print(landsChart);
-
-// Get crop type dataset.
-var cdl = ee.Image('USDA/NASS/CDL/2020').select(['cropland'])
-Map.addLayer(cdl.clip(geometry), {}, 'CDL2020');
+app.listen (PORT, () => {
+  console.log(`Server Live on port ${PORT}`);
+});
